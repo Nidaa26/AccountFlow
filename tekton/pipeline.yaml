@@ -1,0 +1,73 @@
+
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: cd-pipeline
+spec:
+  workspaces:
+    - name: pipeline-workspace
+  params:
+    - name: repo-url
+      type: string
+    - name: branch
+      type: string
+      default: main
+    - name: build-image
+      type: string
+
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: pipeline-workspace
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch)
+
+    - name: lint
+      runAfter: ["clone"]
+      taskRef:
+        name: flake8
+        kind: ClusterTask
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+
+    - name: tests
+      runAfter: ["lint"]
+      taskRef:
+        name: nose
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+
+    - name: build
+      runAfter: ["tests"]
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
+
+    - name: deploy
+      runAfter: ["build"]
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      workspaces:
+        - name: manifest-dir
+          workspace: pipeline-workspace
+      params:
+        - name: SCRIPT
+          value: |
+            oc set image deployment/accounts accounts=$(params.build-image) -n $(context.pipelineRun.namespace)
+            oc rollout status deployment/accounts -n $(context.pipelineRun.namespace)
